@@ -1,0 +1,17 @@
+services:
+  annotate-ai:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      ANNOTATE_DB_PATH: /app/data/annotate.sqlite
+      PORT: "18767"
+    ports:
+      - "18767:18767"
+    volumes:
+      - annotate-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  annotate-data:
+

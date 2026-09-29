@@ -63,7 +63,7 @@ docker compose -f deploy/compose.yaml up -d --build
 
 The database location is controlled by `ANNOTATE_DB_PATH`; the server listens on `PORT` (default `18767`). Back up the SQLite database and its WAL state together using SQLite's backup API or a stopped container.
 
-The independent 5.77 instance is at `http://192.168.5.77:18767/`. Its source releases live under `~/annotate-ai/releases/` on that host; Compose uses the fixed `annotate-ai` project name, so a new release keeps the same `annotate-ai_annotate-data` SQLite volume. To publish a committed revision from this repository, archive the commit into a new release directory on 5.77, then run `docker compose -f deploy/compose.yaml up -d --build --wait` there. Check `/health`, load `/embed.js`, and read back an existing comment before considering the update complete. Do not change the separate dashboard or dev-gateway project to publish this service.
+The independent 5.77 instance listens on `127.0.0.1:18767` behind `https://dg-test.d-m.cc/annotate-ai/`. Its source releases live under `~/annotate-ai/releases/` on that host; Compose uses the fixed `annotate-ai` project name, so a new release keeps the same `annotate-ai_annotate-data` SQLite volume. To publish a committed revision from this repository, archive the commit into a new release directory on 5.77, then run `docker compose -f deploy/compose.yaml up -d --build --wait` there. Check `/annotate-ai/health`, load `/annotate-ai/embed.js`, and read back an existing comment before considering the update complete. Do not change the separate dashboard or dev-gateway child application to publish this service.
 
 ## Development checks
 

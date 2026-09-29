@@ -1,3 +1,5 @@
+name: annotate-ai
+
 services:
   annotate-ai:
     build:
@@ -14,4 +16,3 @@ services:
 
 volumes:
   annotate-data:
-

@@ -1,17 +1,13 @@
 /* =============================================================================
  * annotate.js — a drop-in visual review & annotation layer for any website.
- * Open-source edition · local-only · zero backend.
+ * Hosted edition: review data is stored by the annotate-ai service.
  *
- * Load with a single <script> tag:
- *   <script src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js" defer></script>
- *
- * Comments are stored in the visitor's own browser (localStorage) and can be
- * exported to / imported from a portable JSON file — no server, no database,
- * no tracking. Perfect for design reviews, client feedback, QA passes and docs.
+ * Load the service's embed.js with a registered site key:
+ *   <script src="http://your-comment-service:18767/embed.js" data-key="SITE_KEY" defer></script>
  *
  * Configure via data-attributes on the script tag (all optional):
- *   data-project   namespace for stored comments (keep separate sites apart)
- *   data-page      page key (default: location.pathname)
+ *   data-project   legacy project label; the site key separates stored comments
+ *   data-page      page key (default: pathname + hash route)
  *   data-accent    brand color for primary buttons / active tool
  *   data-theme     "light" | "dark" | "auto"  (default auto — sniffs page bg)
  *   data-position  "bottom-right" | "bottom-left"  (toolbar corner)
@@ -47,7 +43,7 @@
   var globalConfig = window.AnnotateConfig || {};       // window.AnnotateConfig
   var CFG = {
     project: scriptData.project || globalConfig.project || "",
-    page: scriptData.page || globalConfig.page || location.pathname,
+    page: scriptData.page || globalConfig.page || "",
     accent: scriptData.accent || globalConfig.accent || "",
     theme: scriptData.theme || globalConfig.theme || "auto",
     position: scriptData.position || globalConfig.position || "bottom-right",
@@ -55,8 +51,11 @@
     startOpen: truthy(scriptData.startOpen || globalConfig.startOpen),
     note: scriptData.note || globalConfig.note || "",
     share: String(scriptData.shareEmail || globalConfig.shareEmail || "").trim(),
+    key: globalConfig.key || "",
+    apiBase: globalConfig.apiBase || "",
   };
-  var PAGE = (CFG.project ? CFG.project + ":" : "") + CFG.page;
+  function currentPage() { return CFG.page || location.pathname + location.hash; }
+  var PAGE = currentPage();
 
   // localStorage can be denied (private mode, sandboxed iframes) — never crash
   var store = {
@@ -148,19 +147,23 @@
   }
 
   // --------------------------------------------------------------------------
-  // STORAGE — a tiny localStorage-backed comment store. One JSON blob per
-  // project; comments are namespaced by page key.
+  // STORAGE — all review records are read and written through the service.
   // --------------------------------------------------------------------------
-  // localStorage key holding this project's entire comment blob
-  var STORE_KEY = "annotate:" + (CFG.project || location.host || "default");
-  function dbRead() {
-    var d;
-    try { d = JSON.parse(store.get(STORE_KEY) || "null"); } catch (e) { d = null; }
-    if (!d || typeof d !== "object") d = {};
-    if (!Array.isArray(d.comments)) d.comments = [];
-    return d;
+  async function request(method, path, body) {
+    var headers = { "X-Annotate-Key": CFG.key };
+    if (body && !(body instanceof FormData)) headers["Content-Type"] = "application/json";
+    var response = await fetch(CFG.apiBase + path, {
+      method: method,
+      headers: headers,
+      body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,
+    });
+    var result = response.status === 204 ? null : await response.json();
+    if (!response.ok) throw new Error(
+      typeof result?.error === "string" ? result.error : result?.error?.message || "Review service unavailable"
+    );
+    return result;
   }
-  function dbWrite(d) { store.set(STORE_KEY, JSON.stringify(d)); }
+  function failed(error) { toast(error.message || "Review service unavailable", { kind: "error" }); }
   function uid() {
     if (window.crypto && crypto.getRandomValues) {
       var arr = new Uint32Array(3);
@@ -169,13 +172,12 @@
     }
     return "c" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
-  function pageComments() {
-    return dbRead().comments.filter(function (c) { return c.page === PAGE; });
+  async function pageComments() {
+    var result = await request("GET", "/v1/comments?page=" + encodeURIComponent(PAGE));
+    return result.comments;
   }
   function createComment(draft) {
-    var d = dbRead(), now = new Date().toISOString();
-    var c = {
-      id: uid(),
+    return request("POST", "/v1/comments", {
       page: PAGE,
       url: location.href,
       type: draft.type || "note",
@@ -184,37 +186,20 @@
       color: draft.color || state.color,
       anchor: draft.anchor || null,
       geom: draft.geom || null,
-      resolved: false,
-      replies: [],
-      createdAt: now,
-      updatedAt: now,
-    };
-    d.comments.push(c); dbWrite(d);
-    return c;
+    });
   }
   function patchComment(id, changes) {
-    var d = dbRead();
-    var c = d.comments.filter(function (x) { return x.id === id; })[0];
-    if (!c) return null;
-    if (typeof changes.text === "string") c.text = changes.text.slice(0, 5000);
-    if (typeof changes.resolved === "boolean") c.resolved = changes.resolved;
-    if (typeof changes.color === "string") c.color = changes.color;
-    if (changes.reply) c.replies.push(changes.reply);
-    if (changes.editReply) {
-      var ri = c.replies.findIndex(function (r) { return r.id === changes.editReply.id; });
-      if (ri >= 0) { c.replies[ri] = Object.assign({}, c.replies[ri], { text: changes.editReply.text }); }
-    }
-    if (changes.deleteReply) {
-      c.replies = c.replies.filter(function (r) { return r.id !== changes.deleteReply; });
-    }
-    c.updatedAt = new Date().toISOString();
-    dbWrite(d);
-    return c;
+    return request("PATCH", "/v1/comments/" + encodeURIComponent(id), changes);
   }
   function removeComment(id) {
-    var d = dbRead();
-    d.comments = d.comments.filter(function (c) { return c.id !== id; });
-    dbWrite(d);
+    return request("DELETE", "/v1/comments/" + encodeURIComponent(id));
+  }
+  async function addImage(id, file, replyId) {
+    var data = new FormData();
+    data.append("image", file);
+    if (replyId) data.append("replyId", replyId);
+    await request("POST", "/v1/comments/" + encodeURIComponent(id) + "/images", data);
+    await load();
   }
 
   // unique-ish css selector for an element (for re-anchoring overlays)
@@ -471,8 +456,17 @@
     border-left:3px solid var(--an-border-strong);
     padding:5px 9px; border-radius:0 6px 6px 0; margin:6px 0; line-height:1.45;
     max-height:54px; overflow:hidden; }
-  .an-body { font-size:13.5px; line-height:1.5; color: var(--an-fg);
-    white-space:pre-wrap; word-break:break-word; }
+    .an-body { font-size:13.5px; line-height:1.5; color: var(--an-fg);
+      white-space:pre-wrap; word-break:break-word; }
+    .an-body p { margin:0 0 6px; }
+    .an-body p:last-child { margin-bottom:0; }
+    .an-body a { color:var(--an-btn-bg); }
+    .an-image { display:block; max-width:100%; max-height:280px; border-radius:8px;
+      object-fit:contain; margin-top:8px; }
+    .an-emoji-pop { position:absolute; z-index:2147483600; right:0; bottom:100%;
+      width:min(350px,calc(100vw - 24px)); box-shadow:var(--an-shadow-lg); }
+    .an-emoji-pop emoji-picker { width:100%; }
+    .uppy-Dashboard--modal { z-index:2147483640 !important; }
   .an-replies { margin-top:9px; border-top:1px dashed var(--an-border); padding-top:8px;
     display:flex; flex-direction:column; gap:7px; }
   .an-reply { display:flex; gap:8px; font-size:12.5px; line-height:1.45; }
@@ -527,7 +521,7 @@
     background: var(--an-surface-2); border-left:3px solid var(--an-border-strong);
     padding:6px 10px; border-radius:0 6px 6px 0; margin-bottom:9px; max-height:84px;
     overflow-y:auto; font-style:italic; white-space:pre-wrap; word-break:break-word; }
-  #__an_compose .an-cfoot { display:flex; align-items:center; margin-top:10px; gap:7px; }
+  #__an_compose .an-cfoot { display:flex; align-items:center; flex-wrap:wrap; margin-top:10px; gap:7px; position:relative; }
   #__an_compose .an-ckbd { font-size:10.5px; color: var(--an-muted); margin-right:auto; }
   .an-primary { background: var(--an-btn-bg); color: var(--an-btn-fg); border:none;
     border-radius:9px; padding:7px 15px; font:600 12.5px var(--an-font); cursor:pointer;
@@ -1113,15 +1107,19 @@
     var cancel = el("button", { class: "an-ghost", text: "Cancel" });
     var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "";
     var isMac = /Mac|iPhone|iPad/i.test(plat);
-    composer.appendChild(el("div", { class: "an-cfoot" }, [
+    var composeFoot = el("div", { class: "an-cfoot" }, [
       el("span", { class: "an-ckbd", text: (isMac ? "⌘" : "Ctrl") + "↵ to post" }),
       cancel, save,
-    ]));
-    save.addEventListener("click", function () {
+    ]);
+    composer.appendChild(composeFoot);
+    if (window.AnnotateVendor) window.AnnotateVendor.addEmojiButton(ta, composeFoot);
+    save.addEventListener("click", async function () {
+      if (save.disabled) return;
       if (!state.author) { askName(function () { save.click(); }); return; }
       draft.author = state.author;
       draft.text = ta.value.trim();
-      commitDraft(draft);
+      save.disabled = true;
+      if (!await commitDraft(draft)) save.disabled = false;
     });
     cancel.addEventListener("click", cancelDraft);
     ta.addEventListener("keydown", function (e) {
@@ -1206,8 +1204,9 @@
     if (composer) composer.classList.remove("an-show");
     setTool("cursor");
   }
-  function commitDraft(draft) {
-    var c = createComment(draft);
+  async function commitDraft(draft) {
+    var c;
+    try { c = await createComment(draft); } catch (error) { failed(error); return false; }
     composer.classList.remove("an-show");
     clearTemp();
     state.comments.push(c);
@@ -1217,6 +1216,7 @@
     openPanel();
     setTool("cursor");
     pendingDraft = null;
+    return true;
   }
 
   // ==========================================================================
@@ -1503,10 +1503,13 @@
 
     var rt;
     window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
-    // Keep tabs in sync: reload annotations when another tab writes to storage
-    window.addEventListener("storage", function (e) {
-      if (e.key === STORE_KEY) load();
+    window.addEventListener("hashchange", function () {
+      if (pendingDraft) cancelDraft();
+      setTimeout(load, 40);
     });
+    window.setInterval(function () {
+      if (state.panelOpen && !document.querySelector('#__an_panel textarea:focus')) load();
+    }, 8000);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { setTimeout(renderAll, 60); });
     window.addEventListener("load", function () { setTimeout(renderAll, 120); });
     // Resize overlay when page content grows (lazy images, dynamic content)
@@ -1693,6 +1696,7 @@
 
   function togglePanel() { state.panelOpen ? closePanel() : openPanel(); }
   function openPanel() {
+    load();
     state.panelOpen = true;
     panel.classList.add("an-open");
     var root = document.getElementById("__an_root");
@@ -1788,8 +1792,13 @@
       card.appendChild(meta);
       if (c.type === "highlight" && c.anchor && c.anchor.exact)
         card.appendChild(el("div", { class: "an-quote", text: '“' + c.anchor.exact + '”' }));
-      var bodyEl = el("div", { class: "an-body", text: c.text || "" });
+      var bodyEl = el("div", { class: "an-body" });
+      if (window.AnnotateVendor) bodyEl.innerHTML = window.AnnotateVendor.markdown(c.text || "");
+      else bodyEl.textContent = c.text || "";
       if (c.text) card.appendChild(bodyEl);
+      (c.images || []).forEach(function (image) {
+        card.appendChild(el("img", { class: "an-image", src: CFG.apiBase + image.url, alt: "Comment attachment", loading: "lazy" }));
+      });
 
       if (c.replies && c.replies.length) {
         var rep = el("div", { class: "an-replies" });
@@ -1798,20 +1807,34 @@
             avatarEl(r.author, 18),
             el("span", { style: "flex:1;min-width:0" }, [
               el("span", { class: "an-rwho", text: r.author }),
-              document.createTextNode(r.text),
+              (function () { var body = el("span", { class: "an-body" });
+                if (window.AnnotateVendor) body.innerHTML = window.AnnotateVendor.markdown(r.text || "");
+                else body.textContent = r.text || "";
+                return body; })(),
               el("span", { class: "an-rwhen", text: fmtTime(r.createdAt) }),
             ]),
           ]);
+          (r.images || []).forEach(function (image) {
+            replyRow.appendChild(el("img", { class: "an-image", src: CFG.apiBase + image.url, alt: "Reply attachment", loading: "lazy" }));
+          });
           if (r.author === state.author) {
             var rAct = el("span", { style: "display:flex;gap:4px;flex:none;margin-left:6px" });
             var rDel = el("button", { class: "an-mini an-danger", html: ICONS.trash, title: "Delete reply" });
-            rDel.addEventListener("click", function (e) {
+            rDel.addEventListener("click", async function (e) {
               e.stopPropagation();
-              var updated = patchComment(c.id, { deleteReply: r.id });
-              if (updated) { mergeComment(updated); renderPanel(); }
+              try { mergeComment(await patchComment(c.id, { deleteReply: r.id })); renderPanel(); }
+              catch (error) { failed(error); }
             });
             rAct.appendChild(rDel);
             replyRow.appendChild(rAct);
+          }
+          if (window.AnnotateVendor) {
+            var replyImage = el("button", { class: "an-mini", text: "Image" });
+            replyImage.addEventListener("click", function (e) {
+              e.stopPropagation();
+              window.AnnotateVendor.pickImage(function (file) { return addImage(c.id, file, r.id).catch(failed); });
+            });
+            replyRow.appendChild(replyImage);
           }
           rep.appendChild(replyRow);
         });
@@ -1821,13 +1844,14 @@
       var rbox = el("div", { class: "an-replybox" });
       var rin = el("textarea", { class: "an-ta", rows: "2", placeholder: "Reply… (Ctrl+↵ to post)" });
       rbox.appendChild(rin);
+      if (window.AnnotateVendor) window.AnnotateVendor.addEmojiButton(rin, rbox);
       var rsend = el("button", { class: "an-primary", style: "margin-top:6px;align-self:flex-end", text: "Reply" });
       rbox.appendChild(rsend);
-      function submitReply() {
+      async function submitReply() {
         if (!rin.value.trim()) return;
         var reply = { id: uid(), author: state.author || "Anonymous", text: rin.value.trim(), createdAt: new Date().toISOString() };
-        var updated = patchComment(c.id, { reply: reply });
-        if (updated) { rin.value = ""; mergeComment(updated); renderPanel(); }
+        try { mergeComment(await patchComment(c.id, { reply: reply })); rin.value = ""; renderPanel(); }
+        catch (error) { failed(error); }
       }
       rsend.addEventListener("click", function (e) { e.stopPropagation(); submitReply(); });
       rin.addEventListener("keydown", function (e) {
@@ -1845,10 +1869,10 @@
         e.stopPropagation();
         if ((e.metaKey || e.ctrlKey) && e.key === "Enter") esave.click();
       });
-      esave.addEventListener("click", function (e) {
+      esave.addEventListener("click", async function (e) {
         e.stopPropagation();
-        var updated = patchComment(c.id, { text: eta.value.trim() });
-        if (updated) { mergeComment(updated); renderPanel(); }
+        try { mergeComment(await patchComment(c.id, { text: eta.value.trim() })); renderPanel(); }
+        catch (error) { failed(error); }
       });
       card.appendChild(ebox);
 
@@ -1856,11 +1880,15 @@
         el("button", { class: "an-mini", html: ICONS.reply + "<span>Reply</span>", onclick: function (e) {
           e.stopPropagation(); rbox.classList.toggle("an-show"); rin.focus();
         } }),
-        el("button", { class: "an-mini", html: (c.resolved ? "" : ICONS.check) + "<span>" + (c.resolved ? "Reopen" : "Resolve") + "</span>", onclick: function (e) {
+        el("button", { class: "an-mini", html: (c.resolved ? "" : ICONS.check) + "<span>" + (c.resolved ? "Reopen" : "Resolve") + "</span>", onclick: async function (e) {
           e.stopPropagation();
-          var updated = patchComment(c.id, { resolved: !c.resolved });
-          if (updated) { mergeComment(updated); renderAll(); renderPanel(); }
+          try { mergeComment(await patchComment(c.id, { resolved: !c.resolved })); renderAll(); renderPanel(); }
+          catch (error) { failed(error); }
         } }),
+        window.AnnotateVendor ? el("button", { class: "an-mini", text: "Image", onclick: function (e) {
+          e.stopPropagation();
+          window.AnnotateVendor.pickImage(function (file) { return addImage(c.id, file).catch(failed); });
+        } }) : null,
         c.author === state.author ? el("button", { class: "an-mini", html: ICONS.edit + "<span>Edit</span>", onclick: function (e) {
           e.stopPropagation();
           eta.value = c.text || "";
@@ -1964,7 +1992,7 @@
     if (g.kind === "block") return typeof g.selector === "string" && g.selector.length < 4096;
     return true;
   }
-  function importComments(data) {
+  async function importComments(data) {
     var incoming = data && Array.isArray(data.comments) ? data.comments : null;
     if (!incoming) { toast("No comments found in that file", { kind: "error" }); return; }
     // Warn if the export came from a different page
@@ -1984,19 +2012,20 @@
       prepared.push(copy);
     });
     if (!prepared.length) { toast("Nothing new to import", { kind: "info" }); return; }
-    var d = dbRead();
-    d.comments = d.comments.concat(prepared);
-    dbWrite(d);
-    load();
-    toast("Imported " + prepared.length + " comment" + (prepared.length === 1 ? "" : "s"), { kind: "success" });
+    try {
+      for (var i = 0; i < prepared.length; i++) await request("POST", "/v1/comments", prepared[i]);
+      await load();
+      toast("Imported " + prepared.length + " comment" + (prepared.length === 1 ? "" : "s"), { kind: "success" });
+    } catch (error) { failed(error); }
   }
 
   function copyLink(id) {
-    var link = location.origin + location.pathname + location.search + "#an=" + id;
+    var link = new URL(location.href);
+    link.searchParams.set("annotation", id);
     function ok() { toast("Link copied to clipboard", { kind: "success" }); }
     if (navigator.clipboard && navigator.clipboard.writeText)
-      navigator.clipboard.writeText(link).then(ok, function () { prompt("Copy link:", link); });
-    else prompt("Copy link:", link);
+      navigator.clipboard.writeText(link.href).then(ok, function () { prompt("Copy link:", link.href); });
+    else prompt("Copy link:", link.href);
   }
 
   // delete with undo — remove locally now, persist when the toast expires
@@ -2020,9 +2049,11 @@
         if (!inserted) state.comments.push(c);
         renderAll(); renderPanel();
       },
-      onExpire: function () {
+      onExpire: async function () {
         delete pendingDeletes[c.id];
-        removeComment(c.id);
+        try { await removeComment(c.id); } catch (error) {
+          state.comments.push(c); renderAll(); renderPanel(); failed(error);
+        }
       },
     });
   }
@@ -2049,9 +2080,7 @@
     footEl.innerHTML = "";
     footEl.appendChild(el("div", { class: "an-localnote" }, [
       el("span", { html: ICONS.info }),
-      el("span", { text: canShare
-        ? "Saved in this browser. Download or share to send your comments."
-        : "Saved in this browser. Download to send your comments." }),
+      el("span", { text: "Saved in the review service. Teammates can see this page's comments." }),
     ]));
     footEl.appendChild(el("div", { class: "an-footrow" + (canShare ? " an-four" : "") }, [
       el("button", { class: "an-fbtn" + (n ? " an-pulse" : ""), title: "Download comments as JSON", html: ICONS.download + "<span>Download</span>", onclick: exportComments }),
@@ -2224,16 +2253,21 @@
   // BOOT
   // ==========================================================================
   var firstLoad = true;
-  function load() {
+  async function load() {
     if (pendingDraft || drawing) return;
-    state.comments = pageComments().filter(function (c) { return !pendingDeletes[c.id]; });
+    PAGE = currentPage();
+    var requestedPage = PAGE;
+    try {
+      var comments = await pageComments();
+      if (requestedPage !== currentPage()) return;
+      state.comments = comments.filter(function (c) { return !pendingDeletes[c.id]; });
+    } catch (error) { failed(error); return; }
     renderAll();
     renderPanel();
     if (firstLoad) {
       firstLoad = false;
-      var m = location.hash.match(/^#an=(.+)$/);
-      if (m) {
-        var target = decodeURIComponent(m[1]);
+      var target = new URL(location.href).searchParams.get("annotation");
+      if (target) {
         if (state.comments.some(function (c) { return c.id === target; }))
           setTimeout(function () { focusComment(target, false); }, 150);
       }
@@ -2252,7 +2286,7 @@
     // only when the reviewer actually clicks Review (see launchEl handler).
     // A deep link (#an=<id>) and opt-in data-start-open embeds open straight
     // into review mode. All other embeds start as the collapsed Review pill.
-    if (/^#an=./.test(location.hash) || CFG.startOpen) setEnabled(true);
+    if (new URL(location.href).searchParams.has("annotation") || CFG.startOpen) setEnabled(true);
     else setEnabled(false);
   }
 
@@ -2279,12 +2313,6 @@
     toast: toast,
     export: function () { exportComments(); },
     import: function () { pickImportFile(); },
-    clear: function () {
-      var d = dbRead();
-      d.comments = d.comments.filter(function (c) { return c.page !== PAGE; });
-      dbWrite(d);
-      load();
-    },
   };
 
   if (document.readyState === "loading")

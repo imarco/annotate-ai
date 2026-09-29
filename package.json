@@ -1,7 +1,8 @@
 {
-  "name": "@reviewjs/annotate",
+  "name": "annotate-ai",
   "version": "1.2.0",
-  "description": "A drop-in visual review & annotation layer for any website. Local-only, zero backend. Highlight text, draw shapes, drop pins and leave threaded comments — then download them as JSON.",
+  "description": "A self-hosted visual review layer with SQLite comments, threads and images.",
+  "private": true,
   "main": "annotate.js",
   "unpkg": "annotate.js",
   "jsdelivr": "annotate.js",
@@ -11,12 +12,16 @@
     "LICENSE"
   ],
   "scripts": {
-    "start": "npx serve . --listen 4200 --no-clipboard",
-    "demo": "npx serve . --listen 4200 --no-clipboard",
+    "build": "node scripts/build-embed.mjs",
+    "serve": "bun server/index.ts",
+    "project:add": "bun server/cli.ts create-project",
+    "start": "bun server/index.ts",
+    "demo": "bun server/index.ts",
     "pages:build": "rm -rf _site && mkdir -p _site && cp index.html annotate.js logo.png og-image.png .nojekyll CNAME LICENSE README.md package.json _site/ && cp -R examples _site/examples",
     "deploy:pages": "npm run pages:build",
     "publish:npm": "npm publish --access public",
-    "test": "playwright test",
+    "test": "bun test tests/server.test.ts",
+    "test:legacy": "playwright test tests/annotate.spec.js",
     "test:chromium": "playwright test --project=chromium",
     "test:mobile": "playwright test --project=mobile-chrome --project=mobile-safari",
     "test:report": "playwright show-report"
@@ -29,24 +34,33 @@
     "highlight",
     "markup",
     "proofing",
-    "no-backend",
-    "localstorage",
+    "sqlite",
+    "self-hosted",
     "vanilla-js"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/reviewjs/annotate.git"
+    "url": "git+https://github.com/imarco/annotate-ai.git"
   },
-  "homepage": "https://reviewjs.com",
+  "homepage": "https://github.com/imarco/annotate-ai",
   "bugs": {
-    "url": "https://github.com/reviewjs/annotate/issues"
+    "url": "https://github.com/imarco/annotate-ai/issues"
   },
   "directories": {
     "example": "examples"
   },
   "author": "Akash Goswami",
   "devDependencies": {
-    "@playwright/test": "^1.61.0"
+    "@playwright/test": "^1.61.0",
+    "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "@uppy/core": "^6.1.0",
+    "@uppy/dashboard": "^6.0.0",
+    "dompurify": "^3.4.16",
+    "emoji-picker-element": "^1.29.1",
+    "emoji-picker-element-data": "^1.8.0",
+    "marked": "^18.0.14"
   }
 }

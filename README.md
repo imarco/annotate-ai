@@ -32,6 +32,17 @@ That is the calling project's entire integration. The key is a **publishable sit
 
 The page key defaults to the path plus hash route, so tabs and single-page app routes have separate threads. Set `window.AnnotateConfig.page` before the script if a site needs a custom page identity. `data-position="bottom-left"` moves the launcher when the host page already uses the right corner.
 
+SVG graph cells with `data-cell-id` are anchored to that cell and follow its pan or zoom transform. A plain `<canvas>` has no DOM nodes for its internal shapes, so annotations can anchor to the canvas element only; precise shape anchoring requires an adapter to the drawing library.
+
+For the company-service-framework local preview, use the project-specific SQLite file and bind only to loopback:
+
+```sh
+mkdir -p data
+ANNOTATE_HOST=127.0.0.1 ANNOTATE_DB_PATH=./data/annotate.sqlite PORT=18767 ./bin/annotate-server
+```
+
+The site's localhost pages select this service and its separate publishable key. `data/` is ignored by Git. To run it in the background, redirect stdout/stderr to `data/local-server.log` and save the process ID in `data/local-server.pid`; stop that process when no longer needed.
+
 ## Service
 
 `GET /health` checks availability. The browser bundle and emoji data are self-hosted at `/embed.js`, `/embed.css`, `/annotate.js` and `/emoji-data.json`. Comment and image endpoints are under `/v1/`; see [server/README.md](server/README.md) for the request contract. Images are limited to JPEG, PNG, WebP and GIF at 5 MiB each, checked by file signature and stored as SQLite BLOBs. No object store is used.

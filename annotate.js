@@ -205,6 +205,11 @@
   // unique-ish css selector for an element (for re-anchoring overlays)
   function cssPath(node) {
     if (node === document.body) return "body";
+    if (node.hasAttribute && node.hasAttribute("data-cell-id")) {
+      var graph = node.parentElement && node.parentElement.closest("[id]");
+      return (graph ? "#" + CSS.escape(graph.id) + " " : "") +
+        "[data-cell-id=" + CSS.escape(node.getAttribute("data-cell-id")) + "]";
+    }
     if (node.id) return "#" + CSS.escape(node.id);
     var parts = [];
     while (node && node.nodeType === 1 && node !== document.body) {
@@ -910,6 +915,25 @@
   // OVERLAY (shapes + pen) — rendered in document coordinates
   // ==========================================================================
   var overlay, pinLayer;
+  var graphicObserver, graphicRenderQueued = false;
+  function watchGraphicAnchors() {
+    if (typeof MutationObserver === "undefined") return;
+    if (!graphicObserver) graphicObserver = new MutationObserver(function () {
+      if (graphicRenderQueued || drawing || !state.enabled) return;
+      graphicRenderQueued = true;
+      requestAnimationFrame(function () { graphicRenderQueued = false; renderAll(); });
+    });
+    graphicObserver.disconnect();
+    var roots = [];
+    state.comments.forEach(function (c) {
+      var anchor = c.geom && c.geom.selector && resolveAnchorEl(c.geom.selector);
+      var svg = anchor && (anchor.ownerSVGElement || (anchor instanceof SVGSVGElement ? anchor : null));
+      if (svg && roots.indexOf(svg) < 0) roots.push(svg);
+    });
+    roots.forEach(function (svg) {
+      graphicObserver.observe(svg, { attributes: true, attributeFilter: ["transform"], childList: true, subtree: true });
+    });
+  }
   function ensureOverlay() {
     if (overlay) return;
     overlay = svgEl("svg", { id: "__an_overlay" });
@@ -974,6 +998,7 @@
         renderBlock(c);
       }
     });
+    watchGraphicAnchors();
     updateCount();
   }
 
@@ -1308,6 +1333,16 @@
     if (!drawing) return;
     var d = drawing; drawing = null;
     if (d.node) overlay.removeChild(d.node);
+    if (d.tool !== "pen" && !d.anchorEl.hasAttribute("data-cell-id")) {
+      var midX = (d.startX + e.pageX) / 2 - window.scrollX;
+      var midY = (d.startY + e.pageY) / 2 - window.scrollY;
+      var middle = document.elementFromPoint(midX, midY);
+      var cell = middle && pickAnchor(middle);
+      if (cell && cell.hasAttribute("data-cell-id")) {
+        d.anchorEl = cell;
+        d.box = docBox(cell);
+      }
+    }
     var box = d.box, geom;
     function clearSel() { try { window.getSelection && window.getSelection().removeAllRanges(); } catch (ex) {} }
     if (d.tool === "pen") {
@@ -1332,6 +1367,10 @@
   var SEMANTIC_TAGS = /^(MAIN|ARTICLE|SECTION|ASIDE|HEADER|FOOTER|NAV)$/;
   var CONTAINER_CLASSES = /\b(container|wrap(?:per)?|content|layout|inner|page)\b/;
   function pickAnchor(target) {
+    var cell = target.closest && target.closest("[data-cell-id]:not([data-shape=edge])");
+    if (cell && cell.getBoundingClientRect().width > 0 && cell.getBoundingClientRect().height > 0)
+      return cell;
+    if (target.nodeName === "CANVAS") return target;
     var n = target;
     while (n && n !== document.body) {
       if (isOurs(n)) { n = n.parentElement; continue; }

@@ -32,6 +32,8 @@ That is the calling project's entire integration. The key is a **publishable sit
 
 The page key defaults to the path plus hash route, so tabs and single-page app routes have separate threads. Set `window.AnnotateConfig.page` before the script if a site needs a custom page identity. `data-position="bottom-left"` moves the launcher when the host page already uses the right corner.
 
+The browser refreshes comments about every five seconds while the page is visible, and immediately when Review is opened or the window regains focus. The launcher count updates even while its toolbar is collapsed. Comment creation shows `Submitting…` until the service confirms the write; retries reuse the same comment ID so a lost response does not create a duplicate. This is periodic synchronization, not live push delivery; a hidden tab catches up when shown again.
+
 For internal views that do not change the URL, put `data-annotate-view` on the visible view container and dispatch `annotate:viewchange` after switching it. Use a stable key for each graph, subprocess, or dialog; an empty value keeps the base page. Hidden or missing anchors are not drawn and return when their elements become visible. Comment links include the `annotateView` query parameter, which the host page must restore on load.
 
 ```js

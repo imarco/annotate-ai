@@ -77,6 +77,35 @@ describe("comment service authorization", () => {
 });
 
 describe("comment and reply CRUD", () => {
+  test("retries a client-created comment without duplicating it", async () => {
+    const body = {
+      id: "cretry1234567890",
+      page: "/review",
+      url: "https://alpha.example/review",
+      author: "Reviewer",
+      text: "Keep this comment once",
+      type: "note",
+    };
+    const post = (value: typeof body) => call("/v1/comments", alpha.siteKey, ALPHA_ORIGIN, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(value),
+    });
+    const created = await post(body);
+    expect(created.status).toBe(201);
+    const retry = await post(body);
+    expect(retry.status).toBe(200);
+    expect((await retry.json()).id).toBe(body.id);
+    const listed = await call("/v1/comments?page=%2Freview");
+    expect((await listed.json()).comments).toHaveLength(1);
+    expect((await post({ ...body, text: "Different text" })).status).toBe(409);
+    expect((await call("/v1/comments", beta.siteKey, BETA_ORIGIN, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })).status).toBe(409);
+  });
+
   test("isolates projects and supports reply, edit, resolve and delete operations", async () => {
     const comment = await createAlphaComment();
 
@@ -227,4 +256,3 @@ describe("SQLite image blobs", () => {
     expect(oversizedResponse.status).toBe(413);
   });
 });
-

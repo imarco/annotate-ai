@@ -360,7 +360,22 @@ async function createComment(db: Db, project: Project, request: Request, origin:
   const color = body.color == null ? DEFAULT_COLOR : validateColor(body.color);
   const anchor = structuredJson(body.anchor, "anchor");
   const geom = structuredJson(body.geom, "geom");
-  const commentId = id("c");
+  const requestedId = body.id == null ? null : requiredString(body.id, "id", 80);
+  if (requestedId && !/^c[a-z0-9-]{10,79}$/.test(requestedId)) {
+    httpError(400, "invalid_input", "id has an invalid format");
+  }
+  const commentId = requestedId || id("c");
+  const existing = requestedId
+    ? db.query("SELECT * FROM comments WHERE id = ? LIMIT 1").get(requestedId) as CommentRow | null
+    : null;
+  if (existing) {
+    if (existing.project_id !== project.id || existing.page !== page || existing.url !== url ||
+      existing.type !== type || existing.author !== author || existing.text !== text ||
+      existing.color !== color || existing.anchor_json !== anchor || existing.geom_json !== geom) {
+      httpError(409, "id_conflict", "comment id was already used for different content");
+    }
+    return jsonResponse(toComment(db, project, existing), 200, origin);
+  }
   const timestamp = now();
   db.query(
     `INSERT INTO comments

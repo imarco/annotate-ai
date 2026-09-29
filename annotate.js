@@ -73,6 +73,7 @@
     return link.href;
   }
   var PAGE = currentPage();
+  var loadToken = 0;
 
   // localStorage can be denied (private mode, sandboxed iframes) — never crash
   var store = {
@@ -166,14 +167,25 @@
   // --------------------------------------------------------------------------
   // STORAGE — all review records are read and written through the service.
   // --------------------------------------------------------------------------
-  async function request(method, path, body) {
+  async function request(method, path, body, timeoutMs) {
     var headers = { "X-Annotate-Key": CFG.key };
     if (body && !(body instanceof FormData)) headers["Content-Type"] = "application/json";
-    var response = await fetch(CFG.apiBase + path, {
-      method: method,
-      headers: headers,
-      body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,
-    });
+    var controller = timeoutMs ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
+    var response;
+    try {
+      response = await fetch(CFG.apiBase + path, {
+        method: method,
+        headers: headers,
+        body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,
+        signal: controller ? controller.signal : undefined,
+      });
+    } catch (error) {
+      if (controller && controller.signal.aborted) throw new Error("Request timed out. Retry this comment.");
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     var result = response.status === 204 ? null : await response.json();
     if (!response.ok) throw new Error(
       typeof result?.error === "string" ? result.error : result?.error?.message || "Review service unavailable"
@@ -189,21 +201,25 @@
     }
     return "c" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
-  async function pageComments() {
-    var result = await request("GET", "/v1/comments?page=" + encodeURIComponent(PAGE));
+  async function pageComments(page) {
+    var result = await request("GET", "/v1/comments?page=" + encodeURIComponent(page));
     return result.comments;
   }
   function createComment(draft) {
+    if (!draft.id) draft.id = uid();
+    if (!draft.page) draft.page = currentPage();
+    if (!draft.url) draft.url = reviewURL();
     return request("POST", "/v1/comments", {
-      page: PAGE,
-      url: reviewURL(),
+      id: draft.id,
+      page: draft.page,
+      url: draft.url,
       type: draft.type || "note",
       author: state.author || "Anonymous",
       text: String(draft.text || "").slice(0, 5000),
       color: draft.color || state.color,
       anchor: draft.anchor || null,
       geom: draft.geom || null,
-    });
+    }, 15000);
   }
   function patchComment(id, changes) {
     return request("PATCH", "/v1/comments/" + encodeURIComponent(id), changes);
@@ -1133,7 +1149,7 @@
   // ==========================================================================
   // COMPOSER (new comment popover)
   // ==========================================================================
-  var composer, pendingDraft = null, composerShownAt = 0;
+  var composer, pendingDraft = null, submittingDraft = false, composerShownAt = 0;
   function ensureComposer() {
     if (composer) return;
     composer = el("div", { id: "__an_compose" });
@@ -1178,7 +1194,20 @@
       draft.author = state.author;
       draft.text = ta.value.trim();
       save.disabled = true;
-      if (!await commitDraft(draft)) save.disabled = false;
+      cancel.disabled = true;
+      ta.readOnly = true;
+      submittingDraft = true;
+      save.textContent = "Submitting…";
+      composer.setAttribute("aria-busy", "true");
+      var saved = await commitDraft(draft);
+      submittingDraft = false;
+      composer.removeAttribute("aria-busy");
+      if (!saved) {
+        save.disabled = false;
+        cancel.disabled = false;
+        ta.readOnly = false;
+        save.textContent = "Comment";
+      }
     });
     cancel.addEventListener("click", cancelDraft);
     ta.addEventListener("keydown", function (e) {
@@ -1258,6 +1287,7 @@
     tempMarks = [];
   }
   function cancelDraft() {
+    if (submittingDraft) return;
     pendingDraft = null;
     clearTemp();
     if (composer) composer.classList.remove("an-show");
@@ -1266,15 +1296,21 @@
   async function commitDraft(draft) {
     var c;
     try { c = await createComment(draft); } catch (error) { failed(error); return false; }
+    loadToken++;
     composer.classList.remove("an-show");
     clearTemp();
-    state.comments.push(c);
-    state.activeId = c.id;
+    pendingDraft = null;
+    if (c.page === currentPage()) {
+      state.comments.push(c);
+      state.activeId = c.id;
+    } else {
+      load();
+    }
     renderAll();
     renderPanel();
     openPanel();
     setTool("cursor");
-    pendingDraft = null;
+    toast("Comment saved", { kind: "success" });
     return true;
   }
 
@@ -1585,8 +1621,12 @@
     });
     document.addEventListener("annotate:viewchange", changePage);
     window.setInterval(function () {
-      if (state.panelOpen && !document.querySelector('#__an_panel textarea:focus')) load();
-    }, 8000);
+      if (document.visibilityState === "visible" && !document.querySelector('#__an_panel textarea:focus')) load();
+    }, 5000);
+    window.addEventListener("focus", load);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") load();
+    });
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { setTimeout(renderAll, 60); });
     window.addEventListener("load", function () { setTimeout(renderAll, 120); });
     // Resize overlay when page content grows (lazy images, dynamic content)
@@ -1732,6 +1772,7 @@
       if (launchEl) launchEl.classList.remove("an-show");
       renderAll();
       renderPanel();
+      load();
     } else {
       setTool("cursor");
       cancelDraft();
@@ -1816,6 +1857,7 @@
   function updateCount() {
     var n = state.comments.filter(function (c) { return !c.resolved; }).length;
     if (countBadge) { countBadge.textContent = n; countBadge.style.display = n ? "flex" : "none"; }
+    if (launchEl && !state.enabled) launchEl.querySelector("span").textContent = n ? "Review (" + n + ")" : "Review";
     var sub = document.getElementById("__an_sub");
     if (sub) sub.textContent = String(state.comments.length);
   }
@@ -2330,6 +2372,7 @@
   // ==========================================================================
   var focusedDeepLink = false;
   function changePage() {
+    loadToken++;
     if (pendingDraft) cancelDraft();
     if (drawing) { if (drawing.node) drawing.node.remove(); drawing = null; }
     var next = currentPage();
@@ -2346,10 +2389,13 @@
     if (pendingDraft || drawing) return;
     PAGE = currentPage();
     var requestedPage = PAGE;
+    var token = ++loadToken;
     try {
-      var comments = await pageComments();
-      if (requestedPage !== currentPage()) return;
-      state.comments = comments.filter(function (c) { return !pendingDeletes[c.id]; });
+      var comments = await pageComments(requestedPage);
+      if (token !== loadToken || requestedPage !== currentPage()) return;
+      var fresh = comments.filter(function (c) { return !pendingDeletes[c.id]; });
+      if (JSON.stringify(fresh) === JSON.stringify(state.comments)) return;
+      state.comments = fresh;
     } catch (error) { failed(error); return; }
     renderAll();
     renderPanel();

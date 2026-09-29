@@ -32,6 +32,13 @@ That is the calling project's entire integration. The key is a **publishable sit
 
 The page key defaults to the path plus hash route, so tabs and single-page app routes have separate threads. Set `window.AnnotateConfig.page` before the script if a site needs a custom page identity. `data-position="bottom-left"` moves the launcher when the host page already uses the right corner.
 
+For internal views that do not change the URL, put `data-annotate-view` on the visible view container and dispatch `annotate:viewchange` after switching it. Use a stable key for each graph, subprocess, or dialog; an empty value keeps the base page. Hidden or missing anchors are not drawn and return when their elements become visible. Comment links include the `annotateView` query parameter, which the host page must restore on load.
+
+```js
+viewContainer.dataset.annotateView = 'atlas/subprocess/s01_reply/S01';
+document.dispatchEvent(new Event('annotate:viewchange'));
+```
+
 SVG graph cells with `data-cell-id` are anchored to that cell and follow its pan or zoom transform. A plain `<canvas>` has no DOM nodes for its internal shapes, so annotations can anchor to the canvas element only; precise shape anchoring requires an adapter to the drawing library.
 
 For the company-service-framework local preview, use the project-specific SQLite file and bind only to loopback:

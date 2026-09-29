@@ -76,7 +76,7 @@ if (!key) {
   };
 
   const runtime = document.createElement('script');
-  runtime.src = new URL('annotate.js', base).href;
+  runtime.src = new URL('annotate.js', base).href + new URL(script.src).search;
   runtime.defer = true;
   document.head.appendChild(runtime);
 }

@@ -54,7 +54,24 @@
     key: globalConfig.key || "",
     apiBase: globalConfig.apiBase || "",
   };
-  function currentPage() { return CFG.page || location.pathname + location.hash; }
+  function activeView() {
+    var scope = document.querySelector("[data-annotate-view]");
+    return scope && visibleAnchor(scope) ? scope.getAttribute("data-annotate-view") || "" : "";
+  }
+  function currentPage() {
+    var page = CFG.page || location.pathname + location.hash;
+    var view = activeView();
+    return view ? page + "::" + view : page;
+  }
+  function reviewURL(id) {
+    var link = new URL(location.href);
+    var view = activeView();
+    if (view) link.searchParams.set("annotateView", view);
+    else link.searchParams.delete("annotateView");
+    if (id) link.searchParams.set("annotation", id);
+    else link.searchParams.delete("annotation");
+    return link.href;
+  }
   var PAGE = currentPage();
 
   // localStorage can be denied (private mode, sandboxed iframes) — never crash
@@ -179,7 +196,7 @@
   function createComment(draft) {
     return request("POST", "/v1/comments", {
       page: PAGE,
-      url: location.href,
+      url: reviewURL(),
       type: draft.type || "note",
       author: state.author || "Anonymous",
       text: String(draft.text || "").slice(0, 5000),
@@ -224,8 +241,14 @@
     }
     return (parts[0] && parts[0][0] === "#" ? "" : "body > ") + parts.join(" > ");
   }
+  function visibleAnchor(node) {
+    var box = node.getBoundingClientRect();
+    return box.width > 0 && box.height > 0 && getComputedStyle(node).visibility !== "hidden" &&
+      !node.closest("[hidden],[inert],[aria-hidden=true]");
+  }
   function resolveAnchorEl(selector) {
-    try { return document.querySelector(selector); } catch (e) { return null; }
+    try { return Array.prototype.find.call(document.querySelectorAll(selector), visibleAnchor) || null; }
+    catch (e) { return null; }
   }
 
   // Trap Tab focus inside a modal container; returns a cleanup function.
@@ -924,14 +947,25 @@
       requestAnimationFrame(function () { graphicRenderQueued = false; renderAll(); });
     });
     graphicObserver.disconnect();
+    var attrs = ["transform", "style", "class", "hidden", "aria-hidden", "inert"];
     var roots = [];
+    var scope = document.querySelector("[data-annotate-view]");
+    if (scope) {
+      graphicObserver.observe(scope, { attributes: true, attributeFilter: attrs });
+      for (var parent = scope.parentElement; parent && parent !== document.body; parent = parent.parentElement)
+        graphicObserver.observe(parent, { attributes: true, attributeFilter: attrs });
+      var graphHost = scope.querySelector(".atlas-graph");
+      if (graphHost) roots.push(graphHost);
+    }
     state.comments.forEach(function (c) {
-      var anchor = c.geom && c.geom.selector && resolveAnchorEl(c.geom.selector);
+      var anchor;
+      try { anchor = c.geom && c.geom.selector && document.querySelector(c.geom.selector); } catch (e) {}
       var svg = anchor && (anchor.ownerSVGElement || (anchor instanceof SVGSVGElement ? anchor : null));
       if (svg && roots.indexOf(svg) < 0) roots.push(svg);
+      else if (anchor) graphicObserver.observe(anchor, { attributes: true, attributeFilter: attrs });
     });
-    roots.forEach(function (svg) {
-      graphicObserver.observe(svg, { attributes: true, attributeFilter: ["transform"], childList: true, subtree: true });
+    roots.forEach(function (root) {
+      graphicObserver.observe(root, { attributes: true, attributeFilter: attrs, childList: true, subtree: true });
     });
   }
   function ensureOverlay() {
@@ -1026,7 +1060,7 @@
   }
   function renderGeom(c) {
     var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : document.body;
-    if (!anchorEl) anchorEl = document.body;
+    if (!anchorEl) return;
     var box = docBox(anchorEl);
     var g = c.geom;
     var node;
@@ -1083,7 +1117,7 @@
 
   function renderPin(c) {
     var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : document.body;
-    if (!anchorEl) anchorEl = document.body;
+    if (!anchorEl) return;
     var box = docBox(anchorEl);
     var idx = state.comments.indexOf(c) + 1;
     var pin = el("div", { class: "an-pin" + (c.id === state.activeId ? " an-active" : ""), title: c.text || "" },
@@ -1256,6 +1290,8 @@
     if (composer && composer.classList.contains("an-show")) return;
     if (composer && composer.contains(e.target)) return;
     if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_toasts"))) return;
+    var dialog = document.querySelector("[data-annotate-dialog][data-open]");
+    if (dialog && !dialog.contains(e.target)) return;
     setTimeout(function () {
       var sel = window.getSelection();
       if (!sel || sel.isCollapsed) return;
@@ -1276,6 +1312,8 @@
     if (e.button !== 0 && e.pointerType === "mouse") return;
     if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_compose") || e.target.closest("#__an_toasts")))
       return;
+    var dialog = document.querySelector("[data-annotate-dialog][data-open]");
+    if (dialog && !dialog.contains(e.target)) return;
     var t = state.tool;
     if (t === "pin") {
       var anchorEl = pickAnchor(e.target);
@@ -1543,9 +1581,9 @@
     var rt;
     window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
     window.addEventListener("hashchange", function () {
-      if (pendingDraft) cancelDraft();
-      setTimeout(load, 40);
+      setTimeout(changePage, 40);
     });
+    document.addEventListener("annotate:viewchange", changePage);
     window.setInterval(function () {
       if (state.panelOpen && !document.querySelector('#__an_panel textarea:focus')) load();
     }, 8000);
@@ -1971,7 +2009,7 @@
       kind: "annotate-export",
       exportedAt: new Date().toISOString(),
       page: PAGE,
-      url: location.href,
+      url: reviewURL(),
       project: CFG.project || "",
       exportedViewport: { vw: window.innerWidth, vh: window.innerHeight, dpr: window.devicePixelRatio || 1 },
       comments: comments,
@@ -2059,12 +2097,11 @@
   }
 
   function copyLink(id) {
-    var link = new URL(location.href);
-    link.searchParams.set("annotation", id);
+    var link = reviewURL(id);
     function ok() { toast("Link copied to clipboard", { kind: "success" }); }
     if (navigator.clipboard && navigator.clipboard.writeText)
-      navigator.clipboard.writeText(link.href).then(ok, function () { prompt("Copy link:", link.href); });
-    else prompt("Copy link:", link.href);
+      navigator.clipboard.writeText(link).then(ok, function () { prompt("Copy link:", link); });
+    else prompt("Copy link:", link);
   }
 
   // delete with undo — remove locally now, persist when the toast expires
@@ -2162,7 +2199,7 @@
       lines += "\n… and " + (comments.length - visible.length) + " more comment" + (comments.length - visible.length === 1 ? "" : "s") + " in the JSON file.";
     return {
       subject: "Review comments — " + (CFG.project || PAGE),
-      body: "Review of " + location.href + "\n\n" + lines +
+      body: "Review of " + reviewURL() + "\n\n" + lines +
         "\n\n(" + comments.length + " comment" + (comments.length === 1 ? "" : "s") +
         ". The full JSON file keeps positions & replies — attach it.)",
     };
@@ -2291,7 +2328,20 @@
   // ==========================================================================
   // BOOT
   // ==========================================================================
-  var firstLoad = true;
+  var focusedDeepLink = false;
+  function changePage() {
+    if (pendingDraft) cancelDraft();
+    if (drawing) { if (drawing.node) drawing.node.remove(); drawing = null; }
+    var next = currentPage();
+    if (next !== PAGE) {
+      PAGE = next;
+      state.comments = [];
+      state.activeId = null;
+      renderAll();
+      renderPanel();
+    }
+    load();
+  }
   async function load() {
     if (pendingDraft || drawing) return;
     PAGE = currentPage();
@@ -2303,12 +2353,13 @@
     } catch (error) { failed(error); return; }
     renderAll();
     renderPanel();
-    if (firstLoad) {
-      firstLoad = false;
+    if (!focusedDeepLink) {
       var target = new URL(location.href).searchParams.get("annotation");
       if (target) {
-        if (state.comments.some(function (c) { return c.id === target; }))
+        if (state.comments.some(function (c) { return c.id === target; })) {
+          focusedDeepLink = true;
           setTimeout(function () { focusComment(target, false); }, 150);
+        }
       }
     }
   }

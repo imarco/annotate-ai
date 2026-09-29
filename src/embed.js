@@ -37,22 +37,46 @@ if (!key) {
       button.className = 'an-mini';
       button.textContent = '😀 Emoji';
       button.setAttribute('aria-label', 'Choose emoji');
+      button.setAttribute('aria-expanded', 'false');
       parent.appendChild(button);
+      let pop;
+      const close = () => {
+        pop?.remove();
+        pop = null;
+        button.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('pointerdown', closeOutside, true);
+      };
+      const closeOutside = event => {
+        if (!pop?.contains(event.target) && !button.contains(event.target)) close();
+      };
       button.addEventListener('click', event => {
         event.stopPropagation();
-        const open = parent.querySelector('.an-emoji-pop');
-        if (open) { open.remove(); return; }
-        const pop = document.createElement('div');
+        if (pop) { close(); return; }
+        document.querySelector('.an-emoji-pop')?.dispatchEvent(new Event('an-close'));
+        pop = document.createElement('div');
         pop.className = 'an-emoji-pop';
+        pop.addEventListener('an-close', close);
         const picker = new Picker({ dataSource: new URL('emoji-data.json', base).href });
         picker.addEventListener('emoji-click', choice => {
           const start = textarea.selectionStart;
           textarea.setRangeText(choice.detail.unicode, start, textarea.selectionEnd, 'end');
           textarea.focus();
-          pop.remove();
+          close();
         });
         pop.appendChild(picker);
-        parent.appendChild(pop);
+        document.body.appendChild(pop);
+        const anchor = button.getBoundingClientRect();
+        const box = pop.getBoundingClientRect();
+        const gap = 8;
+        const below = innerHeight - anchor.bottom - gap;
+        const above = anchor.top - gap;
+        pop.style.left = `${Math.max(gap, Math.min(anchor.right - box.width, innerWidth - box.width - gap))}px`;
+        pop.style.top = `${Math.max(gap, Math.min(
+          below >= box.height || below >= above ? anchor.bottom + gap : anchor.top - box.height - gap,
+          innerHeight - box.height - gap,
+        ))}px`;
+        button.setAttribute('aria-expanded', 'true');
+        document.addEventListener('pointerdown', closeOutside, true);
       });
       return button;
     },

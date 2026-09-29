@@ -507,8 +507,9 @@
     .an-body a { color:var(--an-btn-bg); }
     .an-image { display:block; max-width:100%; max-height:280px; border-radius:8px;
       object-fit:contain; margin-top:8px; }
-    .an-emoji-pop { position:absolute; z-index:2147483600; right:0; bottom:100%;
-      width:min(350px,calc(100vw - 24px)); box-shadow:var(--an-shadow-lg); }
+    .an-emoji-pop { position:fixed; z-index:2147483600;
+      width:min(350px,calc(100vw - 16px)); max-height:calc(100vh - 16px);
+      overflow:auto; box-shadow:var(--an-shadow-lg); }
     .an-emoji-pop emoji-picker { width:100%; }
     .uppy-Dashboard--modal { z-index:2147483640 !important; }
   .an-replies { margin-top:9px; border-top:1px dashed var(--an-border); padding-top:8px;
@@ -1156,7 +1157,7 @@
     document.body.appendChild(composer);
     document.addEventListener("pointerdown", function (e) {
       if (performance.now() - composerShownAt < 120) return;
-      if (composer.classList.contains("an-show") && !composer.contains(e.target))
+      if (composer.classList.contains("an-show") && !composer.contains(e.target) && !e.target.closest(".an-emoji-pop"))
         cancelDraft();
     });
   }
@@ -1325,7 +1326,7 @@
     if (state.tool === "pin") return;
     if (composer && composer.classList.contains("an-show")) return;
     if (composer && composer.contains(e.target)) return;
-    if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_toasts"))) return;
+    if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_toasts") || e.target.closest(".an-emoji-pop"))) return;
     var dialog = document.querySelector("[data-annotate-dialog][data-open]");
     if (dialog && !dialog.contains(e.target)) return;
     setTimeout(function () {
@@ -1346,7 +1347,7 @@
   function onDown(e) {
     if (!state.enabled) return;
     if (e.button !== 0 && e.pointerType === "mouse") return;
-    if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_compose") || e.target.closest("#__an_toasts")))
+    if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_compose") || e.target.closest("#__an_toasts") || e.target.closest(".an-emoji-pop")))
       return;
     var dialog = document.querySelector("[data-annotate-dialog][data-open]");
     if (dialog && !dialog.contains(e.target)) return;
